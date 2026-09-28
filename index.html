@@ -415,6 +415,11 @@ const S = {
 // ═══════════════════════════════════════════════
 const LS_PREFIX = 'kblog:';
 
+// Modo admin: abra o blog com #admin no final da URL (ex.: seusite.github.io/meu-blog/#admin)
+// Só nesse modo aparecem os botões de escrever, editar e exportar.
+if (location.hash === '#admin') { try { localStorage.setItem('kblog:admin','1'); } catch {} }
+const ADMIN = (() => { try { return localStorage.getItem('kblog:admin') === '1'; } catch { return false; } })();
+
 function lsGet(key) {
   try {
     const raw = localStorage.getItem(LS_PREFIX + key);
@@ -555,9 +560,11 @@ function header(showNew=true) {
       <span id="blog-name" onclick="goList()">${name}</span>
       ${tagline ? `<span id="hdr-tagline">${esc(tagline)}</span>` : ''}
       <nav id="hdr-nav">
-        ${showNew ? `<button class="nav-btn nav-new" onclick="goEditor(null)">+ novo post</button>` : ''}
-        <button class="nav-btn" onclick="exportBackup()">backup</button>
-        <button class="nav-btn" onclick="openCfg()">configurar</button>
+        ${ADMIN ? `
+          ${showNew ? `<button class="nav-btn nav-new" onclick="goEditor(null)">+ novo post</button>` : ''}
+          <button class="nav-btn" onclick="exportBackup()" title="Baixa o posts.json para subir no GitHub">exportar posts.json</button>
+          <button class="nav-btn" onclick="importBackup()">importar</button>
+          <button class="nav-btn" onclick="openCfg()">configurar</button>` : ''}
       </nav>
     </div>
   </div>`;
@@ -621,7 +628,7 @@ function vList() {
   const content = posts.length === 0
     ? `<div class="empty-state">
         <p>${S.posts.length === 0 ? 'nenhum post ainda.' : 'nenhum post com esse filtro.'}</p>
-        ${S.posts.length === 0 ? `<button onclick="goEditor(null)">escrever primeiro post</button>` : ''}
+        ${S.posts.length === 0 && ADMIN ? `<button onclick="goEditor(null)">escrever primeiro post</button>` : ''}
        </div>`
     : posts.map(postCard).join('');
 
@@ -655,10 +662,10 @@ function vPost() {
         <div class="s-meta">
           <span>${fmtDateLong(p.date)}</span>
           ${tags}
-          <div class="s-actions">
+          ${ADMIN ? `<div class="s-actions">
             <button class="btn-edit" onclick="goEditor('${p.id}')">editar</button>
             <button class="btn-del-sm" onclick="delPost('${p.id}')">excluir</button>
-          </div>
+          </div>` : ''}
         </div>
         <div class="md">${renderMd(p.content)}</div>
       </main>
@@ -714,7 +721,7 @@ function vEditor() {
           <div id="preview-body" class="md hidden"></div>
         </div>
         <div class="ed-actions">
-          <button class="btn-pub" onclick="publish()">publicar</button>
+          <button class="btn-pub" onclick="publish()">salvar post</button>
           <button class="btn-sec" onclick="goList()">descartar</button>
           ${!isNew ? `<button class="btn-del-ed" onclick="delPost('${p.id}')">excluir post</button>` : ''}
         </div>
@@ -910,7 +917,7 @@ async function exportBackup() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `blog-backup-${new Date().toISOString().slice(0,10)}.json`;
+  a.download = 'posts.json';
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -1012,16 +1019,39 @@ Não é que a música ficou melhor. É que eu finalmente apareci para ouvi-la.`,
 // ═══════════════════════════════════════════════
 //  INIT
 // ═══════════════════════════════════════════════
+async function fetchPublished() {
+  try {
+    const r = await fetch('posts.json?v=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { return null; }   // ex.: abrindo o arquivo direto do computador (file://)
+}
+
 async function init() {
-  const cfg = await db.loadCfg();
+  let cfg = null, posts = [];
+
+  if (ADMIN) {
+    cfg = await db.loadCfg();
+    posts = await db.loadPosts();
+  }
+  // Visitante (ou admin com navegador vazio): carrega o que está publicado
+  if (!posts.length) {
+    const pub = await fetchPublished();
+    if (pub) {
+      if (!cfg && pub.cfg) cfg = pub.cfg;
+      posts = (pub.posts || []).sort((a,b) => new Date(b.date)-new Date(a.date));
+      if (ADMIN) for (const p of posts) await db.savePost(p);
+      if (ADMIN && pub.cfg) await db.saveCfg(pub.cfg);
+    }
+  }
+  // Primeira vez de todas: posts de exemplo
+  if (!posts.length) {
+    posts = SAMPLES;
+    if (ADMIN) for (const p of SAMPLES) await db.savePost(p);
+  }
+
   if (cfg) S.cfg = cfg;
   document.title = S.cfg.title;
-
-  let posts = await db.loadPosts();
-  if (posts.length === 0) {
-    for (const p of SAMPLES) await db.savePost(p);
-    posts = SAMPLES;
-  }
   S.posts = posts;
   render();
 }
